@@ -8,7 +8,7 @@ authors = ["Marius Seritan finch.baggies-1h@icloud.com"]
 license = "Apache-2.0"
 repository = "https://github.com/winding-lines/bodkin"
 description = "Easier integration of Apache Arrow data in projects."
-keywords = ["Apache Arrow", "rust", "proc-macro"]
+keywords = ["Apache-Arrow", "rust", "proc-macro"]
 categories = []
 rust-version = "1.83.0"
 
