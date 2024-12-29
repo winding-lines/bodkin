@@ -1,7 +1,13 @@
 [package]
 name = "bodkin-derive"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+description = "Proc macro to simplify the integration of Arrow Data."
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 
 [lib]
 proc-macro = true
