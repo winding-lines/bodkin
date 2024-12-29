@@ -1,0 +1,19 @@
+[workspace]
+members = ["rust/bodkin", "rust/bodkin-derive", "rust/usage"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["Marius Seritan finch.baggies-1h@icloud.com"]
+license = "Apache-2.0"
+repository = "https://github.com/winding-lines/bodkin"
+description = "Easier integration of Apache Arrow data in projects."
+keywords = ["Apache Arrow", "rust", "proc-macro"]
+categories = []
+rust-version = "1.83.0"
+
+[workspace.dependencies]
+arrow = { version = "53.0.0" }
+arrow-array = { version = "53.0.0" }
+arrow-buffer = { version = "53.0.0" }
+arrow-schema = { version = "53.0.0" }

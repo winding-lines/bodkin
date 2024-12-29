@@ -1,0 +1,8 @@
+[package]
+name = "bodkin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bodkin-derive = {path="../bodkin-derive"}
+arrow-array = {workspace = true}

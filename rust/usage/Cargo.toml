@@ -1,0 +1,8 @@
+[package]
+name = "usage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bodkin = {path = "../bodkin"}
+arrow-array = {workspace = true}
