@@ -10,5 +10,5 @@ categories.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-bodkin-derive = {path="../bodkin-derive"}
+bodkin-derive = {path="../bodkin-derive", version="0.1.0"}
 arrow-array = {workspace = true}
