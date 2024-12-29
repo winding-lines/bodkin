@@ -205,7 +205,7 @@ impl Generator {
         quote! {
             impl #builder_name {
 
-                pub fn try_from_record_batch(batch: &arrow_array::RecordBatch) -> Result<Self, bodkin::BodkinError> {
+                pub fn try_from_record_batch(batch: &arrow_array::RecordBatch) -> std::result::Result<Self, bodkin::BodkinError> {
                     #(#fields ;)*
 
                     Ok(#builder_name{ #(#field_names ,)*})
