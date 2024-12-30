@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 extern crate proc_macro;
 
-use std::any::Any;
+use std::{any::Any, panic::panic_any};
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -78,9 +78,9 @@ impl BatchField {
             "u8" if !self.array => quote_spanned! { self.span => arrow_array::UInt8Array},
             "u32" if !self.array => quote_spanned! { self.span => arrow_array::UInt32Array},
             "f32" if !self.array => quote_spanned! { self.span => arrow_array::Float32Array},
-            "str" if !self.array => quote_spanned! { self.span => arrow_array::StringArray},
+            "String" if !self.array => quote_spanned! { self.span => arrow_array::StringArray},
             _ if self.array => quote_spanned! { self.span => arrow_array::ListArray},
-            _ => unimplemented!(),
+            _ => panic_any(format!("Unsupported type: {}", self.inner_type.to_string())),
         }
     }
 
@@ -167,7 +167,7 @@ impl Generator {
         }
     }
 
-    fn field_from_batch(batch_field: &BatchField) -> TokenStream2 {
+    fn load_field_from_arrow(batch_field: &BatchField) -> TokenStream2 {
         let name = batch_field.array_field_name();
         let column_name = batch_field.name.to_string();
         let err_missing = format!("missing column '{}'", column_name);
@@ -191,7 +191,7 @@ impl Generator {
             .schema
             .fields
             .iter()
-            .map(|field| Self::field_from_batch(field))
+            .map(|field| Self::load_field_from_arrow(field))
             .collect::<Vec<_>>();
         let field_names = self
             .schema
