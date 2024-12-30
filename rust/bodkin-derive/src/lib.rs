@@ -13,7 +13,7 @@ use syn::{
     Result, *,
 };
 
-#[proc_macro_derive(ToRecordBatch)]
+#[proc_macro_derive(ArrowIntegration)]
 pub fn rule_system_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as _);
     TokenStream::from(match impl_my_trait(ast) {
@@ -264,12 +264,10 @@ fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
     let schema = RowSchema::new(ast)?;
     let generator = Generator { schema };
     let mut stream = TokenStream2::new();
-    stream.extend(
-        vec![
-            generator.declare_batch_struct(),
-            generator.impl_try_from_record_batch(),
-            generator.impl_arrow_schema(),
-        ],
-    );
+    stream.extend(vec![
+        generator.declare_batch_struct(),
+        generator.impl_try_from_record_batch(),
+        generator.impl_arrow_schema(),
+    ]);
     Ok(stream)
 }

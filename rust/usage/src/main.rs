@@ -1,6 +1,6 @@
-use bodkin::ToRecordBatch;
+use bodkin::ArrowIntegration;
 
-#[derive(ToRecordBatch)]
+#[derive(ArrowIntegration)]
 pub struct Main {
     pub id: u32,
     pub image_file: String,
