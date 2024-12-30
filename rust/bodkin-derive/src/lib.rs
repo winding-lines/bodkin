@@ -73,29 +73,50 @@ impl BatchField {
         }
     }
 
-    pub fn arrow_datatype(&self) -> proc_macro2::TokenStream {
+    pub fn arrow_array_type(&self) -> proc_macro2::TokenStream {
         match self.inner_type.to_string().as_str() {
             "u8" if !self.array => quote_spanned! { self.span => arrow_array::UInt8Array},
             "u32" if !self.array => quote_spanned! { self.span => arrow_array::UInt32Array},
             "f32" if !self.array => quote_spanned! { self.span => arrow_array::Float32Array},
             "String" if !self.array => quote_spanned! { self.span => arrow_array::StringArray},
             _ if self.array => quote_spanned! { self.span => arrow_array::ListArray},
-            _ => panic_any(format!("Unsupported type: {}", self.inner_type.to_string())),
+            _ => panic_any(format!("Unsupported type: {}", self.inner_type)),
+        }
+    }
+
+    fn rust_type_to_arrow_data_type(&self, item_type: &str) -> proc_macro2::TokenStream {
+        match item_type {
+            "u8" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt8},
+            "u32" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt32},
+            "f32" => quote_spanned! { self.span => arrow::datatypes::DataType::Float32},
+            "String" => quote_spanned! { self.span => arrow::datatypes::DataType::Utf8},
+            _ => panic_any(format!("Unsupported type: {}", item_type)),
+        }
+    }
+
+    pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
+        let item_type = self.inner_type.to_string();
+        if self.array {
+            let sub_type = self.rust_type_to_arrow_data_type(item_type.as_str());
+            quote_spanned! { self.span => arrow::datatypes::DataType::List(std::sync::Arc::new(arrow::datatypes::Field::new("item", #sub_type, true)))}
+        } else {
+            self.rust_type_to_arrow_data_type(item_type.as_str())
         }
     }
 
     // In a Batch struct all the fields become arrays, compute a name for them.
     pub fn array_field_name(&self) -> Ident {
-        Ident::new(&format!("{}s", self.name.to_string()), self.span)
+        Ident::new(&format!("{}s", self.name), self.span)
     }
 }
 
-struct Schema {
+// The schema of the input struct written by the user.
+struct RowSchema {
     name: Ident,
     fields: Vec<BatchField>,
 }
 
-impl Schema {
+impl RowSchema {
     pub fn new(ast: DeriveInput) -> Result<Self> {
         let fields_named = match ast.data {
             Data::Enum(DataEnum {
@@ -129,7 +150,7 @@ impl Schema {
             .collect::<Vec<_>>();
 
         let name = ast.ident;
-        Ok(Schema { name, fields })
+        Ok(RowSchema { name, fields })
     }
 
     fn declare_batch_fields(&self) -> Vec<proc_macro2::TokenStream> {
@@ -137,7 +158,7 @@ impl Schema {
             .iter()
             .map(|entry| {
                 let field_name = entry.array_field_name();
-                let ty = entry.arrow_datatype();
+                let ty = entry.arrow_array_type();
 
                 quote_spanned! {  entry.span => pub #field_name: #ty }
             })
@@ -146,13 +167,13 @@ impl Schema {
 }
 
 struct Generator {
-    schema: Schema,
+    schema: RowSchema,
 }
 
 impl Generator {
     fn name(&self) -> Ident {
         Ident::new(
-            format!("{}Batch", self.schema.name.to_string()).as_str(),
+            format!("{}Batch", self.schema.name).as_str(),
             self.schema.name.span(),
         )
     }
@@ -173,7 +194,7 @@ impl Generator {
         let err_missing = format!("missing column '{}'", column_name);
         let err_invalid = format!("invalid column '{}'", column_name);
 
-        let ty = batch_field.arrow_datatype();
+        let ty = batch_field.arrow_array_type();
         let stream = quote_spanned! { batch_field.span =>
          let #name = batch
             .column_by_name(#column_name)
@@ -185,13 +206,13 @@ impl Generator {
         stream
     }
 
-    fn batch_impl(&self) -> TokenStream2 {
+    fn impl_try_from_record_batch(&self) -> TokenStream2 {
         let builder_name = self.name();
         let fields = self
             .schema
             .fields
             .iter()
-            .map(|field| Self::load_field_from_arrow(field))
+            .map(Self::load_field_from_arrow)
             .collect::<Vec<_>>();
         let field_names = self
             .schema
@@ -214,12 +235,41 @@ impl Generator {
             }
         }
     }
+
+    fn impl_arrow_schema(&self) -> TokenStream2 {
+        let builder_name = self.name();
+        let fields = self
+            .schema
+            .fields
+            .iter()
+            .map(|field| {
+                let name = field.name.to_string();
+                let data_type = field.arrow_data_type();
+                let nullable = field.nullable;
+                quote_spanned! { field.span => arrow::datatypes::Field::new(#name, #data_type, #nullable)}
+            })
+            .collect::<Vec<_>>();
+        quote! {
+            impl #builder_name {
+                pub fn arrow_schema() -> arrow::datatypes::Schema {
+                    let fields = vec![#(#fields ,)*];
+                    arrow::datatypes::Schema::new(fields)
+                }
+            }
+        }
+    }
 }
 
 fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
-    let schema = Schema::new(ast)?;
+    let schema = RowSchema::new(ast)?;
     let generator = Generator { schema };
     let mut stream = TokenStream2::new();
-    stream.extend(vec![generator.declare_batch_struct(), generator.batch_impl()].into_iter());
+    stream.extend(
+        vec![
+            generator.declare_batch_struct(),
+            generator.impl_try_from_record_batch(),
+            generator.impl_arrow_schema(),
+        ],
+    );
     Ok(stream)
 }
