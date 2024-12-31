@@ -22,7 +22,8 @@ pub fn rule_system_derive(input: TokenStream) -> TokenStream {
     })
 }
 
-struct BatchField {
+// A field in the input struct written by the user.
+struct RowField {
     pub span: Span,
     pub name: Ident,
     inner_type: TokenStream2,
@@ -30,7 +31,7 @@ struct BatchField {
     array: bool,
 }
 
-impl BatchField {
+impl RowField {
     fn new(field: Field) -> Self {
         let (inner_type, nullable, array) = match &field.ty {
             Type::Path(path) => {
@@ -73,19 +74,27 @@ impl BatchField {
         }
     }
 
-    pub fn arrow_array_type(&self) -> proc_macro2::TokenStream {
+    pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
         match self.inner_type.to_string().as_str() {
-            "u8" if !self.array => quote_spanned! { self.span => arrow_array::UInt8Array},
-            "u32" if !self.array => quote_spanned! { self.span => arrow_array::UInt32Array},
-            "f32" if !self.array => quote_spanned! { self.span => arrow_array::Float32Array},
-            "String" if !self.array => quote_spanned! { self.span => arrow_array::StringArray},
-            _ if self.array => quote_spanned! { self.span => arrow_array::ListArray},
+            "u8" => quote_spanned! { self.span => arrow_array::UInt8Array},
+            "u32" => quote_spanned! { self.span => arrow_array::UInt32Array},
+            "f32" => quote_spanned! { self.span => arrow_array::Float32Array},
+            "String" => quote_spanned! { self.span => arrow_array::StringArray},
             _ => panic_any(format!("Unsupported type: {}", self.inner_type)),
+        } 
+    }
+
+    pub fn arrow_array_type(&self) -> proc_macro2::TokenStream {
+        if !self.array {
+            self.arrow_array_inner_type()
+        } else {
+            quote_spanned! { self.span => arrow_array::ListArray}
         }
     }
 
-    fn rust_type_to_arrow_data_type(&self, item_type: &str) -> proc_macro2::TokenStream {
-        match item_type {
+    fn arrow_data_inner_type(&self) -> proc_macro2::TokenStream {
+        let item_type = self.inner_type.to_string();
+        match item_type.as_str() {
             "u8" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt8},
             "u32" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt32},
             "f32" => quote_spanned! { self.span => arrow::datatypes::DataType::Float32},
@@ -95,12 +104,11 @@ impl BatchField {
     }
 
     pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
-        let item_type = self.inner_type.to_string();
+        let inner = self.arrow_data_inner_type();
         if self.array {
-            let sub_type = self.rust_type_to_arrow_data_type(item_type.as_str());
-            quote_spanned! { self.span => arrow::datatypes::DataType::List(std::sync::Arc::new(arrow::datatypes::Field::new("item", #sub_type, true)))}
+            quote_spanned! { self.span => arrow::datatypes::DataType::List(std::sync::Arc::new(arrow::datatypes::Field::new("item", #inner, true)))}
         } else {
-            self.rust_type_to_arrow_data_type(item_type.as_str())
+            inner
         }
     }
 
@@ -113,7 +121,7 @@ impl BatchField {
 // The schema of the input struct written by the user.
 struct RowSchema {
     name: Ident,
-    fields: Vec<BatchField>,
+    fields: Vec<RowField>,
 }
 
 impl RowSchema {
@@ -146,7 +154,7 @@ impl RowSchema {
         let fields = fields_named
             .named
             .into_iter()
-            .map(BatchField::new)
+            .map(RowField::new)
             .collect::<Vec<_>>();
 
         let name = ast.ident;
@@ -188,7 +196,7 @@ impl Generator {
         }
     }
 
-    fn load_field_from_arrow(batch_field: &BatchField) -> TokenStream2 {
+    fn load_field_from_arrow(batch_field: &RowField) -> TokenStream2 {
         let name = batch_field.array_field_name();
         let column_name = batch_field.name.to_string();
         let err_missing = format!("missing column '{}'", column_name);
@@ -258,6 +266,70 @@ impl Generator {
             }
         }
     }
+
+    fn rust_vec_to_arrow_array(row_field: &RowField) -> (Ident, TokenStream2) {
+        let column_name = &row_field.name;
+        let name = row_field.array_field_name().clone();
+
+        let ty = row_field.arrow_array_inner_type();
+
+        let arrow_array = if row_field.array {
+            let values_name = Ident::new(format!("{}_values", name).as_str(), row_field.span);
+            let offsets_name = Ident::new(format!("{}_offsets", name).as_str(), row_field.span);
+            let offsets_arrow = Ident::new(format!("{}_offsets_arrow", name).as_str(), row_field.span);
+            quote_spanned! { row_field.span =>
+                let #values_name = #ty::from(
+                    items
+                        .iter()
+                        .flat_map(|item| item.#column_name.clone())
+                        .collect::<Vec<_>>(),
+                );
+                let mut #offsets_name: Vec<i32> = Vec::with_capacity(#values_name.len() + 1);
+                #offsets_name.push(0);
+                for (i, len) in items.iter().map(|item| item.#column_name.len() as i32).enumerate() {
+                    #offsets_name.push(#offsets_name[i] + len);
+                }
+                let #offsets_arrow = arrow::array::Int32Array::from_iter(#offsets_name);
+                let #name = bodkin::try_new_generic_list_array(#values_name, &#offsets_arrow)?;
+            }
+        } else {
+            quote_spanned! { row_field.span =>
+                let #name = #ty::from(items
+                    .iter()
+                    .map(|item| item.#column_name.clone())
+                    .collect::<Vec<_>>());
+
+            }
+        };
+        (name, arrow_array)
+    }
+
+    fn impl_to_record_batch(self) -> TokenStream2 {
+        let builder_name = self.name();
+        let (names, arrow_arrays): (Vec<_>, Vec<_>) = self
+            .schema
+            .fields
+            .iter()
+            .map(Self::rust_vec_to_arrow_array)
+            .unzip();
+        let struct_row_name = self.schema.name;
+        quote! {
+            impl #builder_name {
+                pub fn to_record_batch(items: Vec<#struct_row_name>) -> std::result::Result<arrow_array::RecordBatch, bodkin::BodkinError> {
+                    use arrow_array::Array;
+                    let schema = Self::arrow_schema();
+
+                    #(#arrow_arrays)*
+
+                    let out = arrow_array::RecordBatch::try_new(std::sync::Arc::new(schema), vec![
+                        #(std::sync::Arc::new(#names) ,)*
+                    ])?;
+
+                    Ok(out)
+                }
+            }
+        }
+    }
 }
 
 fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
@@ -268,6 +340,7 @@ fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
         generator.declare_batch_struct(),
         generator.impl_try_from_record_batch(),
         generator.impl_arrow_schema(),
+        generator.impl_to_record_batch(),
     ]);
     Ok(stream)
 }
