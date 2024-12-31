@@ -13,4 +13,4 @@ columnar based and code is frequently row based. This project assumes that the
 user defines Rust structs for the row representation. It will provide 
 proc macros to derive the batch representation as a struct of arrow arrays.
 
-Bodkin will generate the pyarrow schema from the row definitions and assume the parquet/lancedb files will use the generated schema.
+Bodkin will generate the pyarrow schema from the row definitions and assume the parquet/lancedb files will use the generated schema. Each `Row Struct` will define its own schema and be saved in one file.

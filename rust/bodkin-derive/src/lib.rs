@@ -234,10 +234,10 @@ impl Generator {
         quote! {
             impl #builder_name {
 
-                pub fn try_from_record_batch(batch: &arrow_array::RecordBatch) -> std::result::Result<Self, bodkin::BodkinError> {
+                pub fn try_from_record_batch(batch: &arrow_array::RecordBatch) -> bodkin::Result<Self> {
                     #(#fields ;)*
 
-                    std::result::Result::Ok(#builder_name{ #(#field_names ,)*})
+                    bodkin::Result::Ok(#builder_name{ #(#field_names ,)*})
                 }
 
             }
@@ -315,7 +315,7 @@ impl Generator {
         let struct_row_name = self.schema.name;
         quote! {
             impl #builder_name {
-                pub fn to_record_batch(items: Vec<#struct_row_name>) -> std::result::Result<arrow_array::RecordBatch, bodkin::BodkinError> {
+                pub fn to_record_batch(items: Vec<#struct_row_name>) -> bodkin::Result<arrow_array::RecordBatch> {
                     use arrow_array::Array;
                     let schema = Self::arrow_schema();
 
@@ -325,7 +325,7 @@ impl Generator {
                         #(std::sync::Arc::new(#names) ,)*
                     ])?;
 
-                    Ok(out)
+                    bodkin::Result::Ok(out)
                 }
             }
         }
