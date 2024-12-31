@@ -50,7 +50,7 @@ pub type Result<T, E = BodkinError> = core::result::Result<T, E>;
 /// ```
 /// use arrow_array::{Int32Array, Int64Array, ListArray};
 /// use arrow_array::types::Int64Type;
-/// use lance_arrow::try_new_generic_list_array;
+/// use bodkin::try_new_generic_list_array;
 ///
 /// let offsets = Int32Array::from_iter([0, 2, 7, 10]);
 /// let int_values = Int64Array::from_iter(0..10);
