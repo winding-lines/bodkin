@@ -22,7 +22,9 @@ pub fn rule_system_derive(input: TokenStream) -> TokenStream {
     })
 }
 
-// A field in the input struct written by the user.
+/// A field in the input struct written by the user.
+/// 
+/// This code is copied from prost-arrow.
 struct RowField {
     pub span: Span,
     pub name: Ident,
@@ -76,9 +78,16 @@ impl RowField {
 
     pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
         match self.inner_type.to_string().as_str() {
+            "i8" => quote_spanned! { self.span => arrow_array::Int8Array},
             "u8" => quote_spanned! { self.span => arrow_array::UInt8Array},
+            "i16" => quote_spanned! { self.span => arrow_array::Int16Array},
+            "u16" => quote_spanned! { self.span => arrow_array::UInt16Array},
+            "i32" => quote_spanned! { self.span => arrow_array::Int32Array},
             "u32" => quote_spanned! { self.span => arrow_array::UInt32Array},
+            "i64" => quote_spanned! { self.span => arrow_array::Int64Array},
+            "u64" => quote_spanned! { self.span => arrow_array::UInt64Array},
             "f32" => quote_spanned! { self.span => arrow_array::Float32Array},
+            "f64" => quote_spanned! { self.span => arrow_array::Float64Array},
             "String" => quote_spanned! { self.span => arrow_array::StringArray},
             _ => panic_any(format!("Unsupported type: {}", self.inner_type)),
         } 
@@ -95,9 +104,16 @@ impl RowField {
     fn arrow_data_inner_type(&self) -> proc_macro2::TokenStream {
         let item_type = self.inner_type.to_string();
         match item_type.as_str() {
+            "i8" => quote_spanned! { self.span => arrow::datatypes::DataType::Int8},
             "u8" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt8},
+            "i16" => quote_spanned! { self.span => arrow::datatypes::DataType::Int16},
+            "u16" => quote_spanned! { self.span => arrow::datatypes::DataType::UIn16},
+            "i32" => quote_spanned! { self.span => arrow::datatypes::DataType::Int32},
             "u32" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt32},
+            "i64" => quote_spanned! { self.span => arrow::datatypes::DataType::Int64},
+            "u64" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt64},
             "f32" => quote_spanned! { self.span => arrow::datatypes::DataType::Float32},
+            "f64" => quote_spanned! { self.span => arrow::datatypes::DataType::Float64},
             "String" => quote_spanned! { self.span => arrow::datatypes::DataType::Utf8},
             _ => panic_any(format!("Unsupported type: {}", item_type)),
         }
@@ -161,8 +177,32 @@ impl RowSchema {
         Ok(RowSchema { name, fields })
     }
 
-    fn declare_batch_fields(&self) -> Vec<proc_macro2::TokenStream> {
-        self.fields
+
+}
+
+/// Generator
+/// 
+/// Hold methods for generating the <User>Arrow struct and the <User>Arrow implementation.
+struct Generator {
+    schema: RowSchema,
+}
+
+impl Generator {
+
+    /// The prefix for the generated struct and associated implementation.
+    const IDENTIFIER_PREFIX: &'static str = "Arrow";
+
+    /// The identifier of the generated struct and associated implementation.
+    fn name(&self) -> Ident {
+        Ident::new(
+            format!("{}{}", self.schema.name, Self::IDENTIFIER_PREFIX).as_str(),
+            self.schema.name.span(),
+        )
+    }
+
+    /// Generate the token stream for the fields of the generated struct.
+    fn declare_derived_arrow_fields(&self) -> Vec<proc_macro2::TokenStream> {
+        self.schema.fields
             .iter()
             .map(|entry| {
                 let field_name = entry.array_field_name();
@@ -172,22 +212,10 @@ impl RowSchema {
             })
             .collect::<Vec<_>>()
     }
-}
 
-struct Generator {
-    schema: RowSchema,
-}
-
-impl Generator {
-    fn name(&self) -> Ident {
-        Ident::new(
-            format!("{}Batch", self.schema.name).as_str(),
-            self.schema.name.span(),
-        )
-    }
-
-    fn declare_batch_struct(&self) -> TokenStream2 {
-        let gen_fields = self.schema.declare_batch_fields();
+    /// Declare the derived Arrow struct.
+    fn declare_derived_arrow_struct(&self) -> TokenStream2 {
+        let gen_fields = self.declare_derived_arrow_fields();
         let builder_name = self.name();
         quote! {
             pub struct #builder_name {
@@ -196,6 +224,9 @@ impl Generator {
         }
     }
 
+    /// Generate the token stream for loading a an arrow column from a record batch.
+    /// 
+    /// Note: the identifier `batch` is expected to be in scope and points to the record batch to load from.
     fn load_field_from_arrow(batch_field: &RowField) -> TokenStream2 {
         let name = batch_field.array_field_name();
         let column_name = batch_field.name.to_string();
@@ -214,6 +245,7 @@ impl Generator {
         stream
     }
 
+    /// Implement the `TryFrom<RecordBatch>` trait for the generated struct.
     fn impl_try_from_record_batch(&self) -> TokenStream2 {
         let builder_name = self.name();
         let fields = self
@@ -244,6 +276,7 @@ impl Generator {
         }
     }
 
+    /// Generate the token stream for the Arrow schema of the generated struct.
     fn impl_arrow_schema(&self) -> TokenStream2 {
         let builder_name = self.name();
         let fields = self
@@ -267,6 +300,7 @@ impl Generator {
         }
     }
 
+    /// Generate the token stream for generating a list of primitive values from a record batch, for a given field.
     fn rust_vec_to_arrow_array(row_field: &RowField) -> (Ident, TokenStream2) {
         let column_name = &row_field.name;
         let name = row_field.array_field_name().clone();
@@ -304,6 +338,7 @@ impl Generator {
         (name, arrow_array)
     }
 
+    /// Implement the `to_record_batch` method for the generated struct.
     fn impl_to_record_batch(self) -> TokenStream2 {
         let builder_name = self.name();
         let (names, arrow_arrays): (Vec<_>, Vec<_>) = self
@@ -315,7 +350,8 @@ impl Generator {
         let struct_row_name = self.schema.name;
         quote! {
             impl #builder_name {
-                pub fn to_record_batch(items: Vec<#struct_row_name>) -> bodkin::Result<arrow_array::RecordBatch> {
+                /// Convert a slice of `#struct_row_name` to an arrow `RecordBatch`, in a fallible way.
+                pub fn to_record_batch(items: &[#struct_row_name]) -> bodkin::Result<arrow_array::RecordBatch> {
                     use arrow_array::Array;
                     let schema = Self::arrow_schema();
 
@@ -337,7 +373,7 @@ fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
     let generator = Generator { schema };
     let mut stream = TokenStream2::new();
     stream.extend(vec![
-        generator.declare_batch_struct(),
+        generator.declare_derived_arrow_struct(),
         generator.impl_try_from_record_batch(),
         generator.impl_arrow_schema(),
         generator.impl_to_record_batch(),

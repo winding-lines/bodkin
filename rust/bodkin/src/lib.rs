@@ -27,8 +27,8 @@ impl Error for BodkinError {}
 impl fmt::Display for BodkinError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            BodkinError::ArrowError(err) => return write!(f, "ArrowError: {}", err),
-            BodkinError::MacroError(message) => return write!(f, "MacroError: {}", message),
+            BodkinError::ArrowError(err) => write!(f, "ArrowError: {}", err),
+            BodkinError::MacroError(message) => write!(f, "MacroError: {}", message),
             
         }
     }
