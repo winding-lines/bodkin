@@ -23,19 +23,20 @@ pub fn rule_system_derive(input: TokenStream) -> TokenStream {
 }
 
 /// A field in the input struct written by the user.
-/// 
-/// This code is copied from prost-arrow.
+///
+/// This code is adapted from prost-arrow.
 struct RowField {
     pub span: Span,
     pub name: Ident,
     inner_type: TokenStream2,
     nullable: bool,
     array: bool,
+    binary: bool,
 }
 
 impl RowField {
     fn new(field: Field) -> Self {
-        let (inner_type, nullable, array) = match &field.ty {
+        let (inner_type, nullable, array, binary) = match &field.ty {
             Type::Path(path) => {
                 let last = path.path.segments.last().expect("has last");
 
@@ -61,10 +62,10 @@ impl RowField {
                     (inner, is_vec)
                 };
 
-                (inner, nullable, array)
+                (inner, nullable, array, is_binary)
             }
 
-            other => (other.into_token_stream(), false, false),
+            other => (other.into_token_stream(), false, false, false),
         };
 
         Self {
@@ -73,26 +74,40 @@ impl RowField {
             inner_type,
             nullable,
             array,
+            binary,
         }
     }
 
+    /// Generate the token stream for this RowField that will be used for primitive types of for the inner type of the Arrow array.
+    /// 
+    /// This is used when instantiating an Arrow array.
     pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
+        if self.binary {
+            return quote_spanned! { self.span => arrow_array::BinaryArray};
+        }
         match self.inner_type.to_string().as_str() {
-            "i8" => quote_spanned! { self.span => arrow_array::Int8Array},
-            "u8" => quote_spanned! { self.span => arrow_array::UInt8Array},
-            "i16" => quote_spanned! { self.span => arrow_array::Int16Array},
-            "u16" => quote_spanned! { self.span => arrow_array::UInt16Array},
-            "i32" => quote_spanned! { self.span => arrow_array::Int32Array},
-            "u32" => quote_spanned! { self.span => arrow_array::UInt32Array},
-            "i64" => quote_spanned! { self.span => arrow_array::Int64Array},
-            "u64" => quote_spanned! { self.span => arrow_array::UInt64Array},
+            "String" => quote_spanned! { self.span => arrow_array::StringArray},
+            "bool" => quote_spanned! { self.span => arrow_array::BooleanArray},
             "f32" => quote_spanned! { self.span => arrow_array::Float32Array},
             "f64" => quote_spanned! { self.span => arrow_array::Float64Array},
-            "String" => quote_spanned! { self.span => arrow_array::StringArray},
-            _ => panic_any(format!("Unsupported type: {}", self.inner_type)),
-        } 
+            "i16" => quote_spanned! { self.span => arrow_array::Int16Array},
+            "i32" => quote_spanned! { self.span => arrow_array::Int32Array},
+            "i64" => quote_spanned! { self.span => arrow_array::Int64Array},
+            "i8" => quote_spanned! { self.span => arrow_array::Int8Array},
+            "u16" => quote_spanned! { self.span => arrow_array::UInt16Array},
+            "u32" => quote_spanned! { self.span => arrow_array::UInt32Array},
+            "u64" => quote_spanned! { self.span => arrow_array::UInt64Array},
+            "u8" => quote_spanned! { self.span => arrow_array::UInt8Array},
+            _ => panic_any(format!(
+                "Unsupported type in arrow_array_inner_type: {}",
+                self.inner_type
+            )),
+        }
     }
 
+    /// Generate the arrow array type for this RowField.
+    ///
+    /// This is used when instantiating an Arrow array.
     pub fn arrow_array_type(&self) -> proc_macro2::TokenStream {
         if !self.array {
             self.arrow_array_inner_type()
@@ -101,25 +116,39 @@ impl RowField {
         }
     }
 
+    /// Generate the token stream for the inner type of the Arrow data type.
+    /// 
+    /// This is used when defining the Arrow schema.
     fn arrow_data_inner_type(&self) -> proc_macro2::TokenStream {
         let item_type = self.inner_type.to_string();
         match item_type.as_str() {
-            "i8" => quote_spanned! { self.span => arrow::datatypes::DataType::Int8},
-            "u8" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt8},
-            "i16" => quote_spanned! { self.span => arrow::datatypes::DataType::Int16},
-            "u16" => quote_spanned! { self.span => arrow::datatypes::DataType::UIn16},
-            "i32" => quote_spanned! { self.span => arrow::datatypes::DataType::Int32},
-            "u32" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt32},
-            "i64" => quote_spanned! { self.span => arrow::datatypes::DataType::Int64},
-            "u64" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt64},
+            "String" => quote_spanned! { self.span => arrow::datatypes::DataType::Utf8},
+            "bool" => quote_spanned! { self.span => arrow::datatypes::DataType::Bool},
             "f32" => quote_spanned! { self.span => arrow::datatypes::DataType::Float32},
             "f64" => quote_spanned! { self.span => arrow::datatypes::DataType::Float64},
-            "String" => quote_spanned! { self.span => arrow::datatypes::DataType::Utf8},
-            _ => panic_any(format!("Unsupported type: {}", item_type)),
+            "i16" => quote_spanned! { self.span => arrow::datatypes::DataType::Int16},
+            "i32" => quote_spanned! { self.span => arrow::datatypes::DataType::Int32},
+            "i64" => quote_spanned! { self.span => arrow::datatypes::DataType::Int64},
+            "i8" => quote_spanned! { self.span => arrow::datatypes::DataType::Int8},
+            "u16" => quote_spanned! { self.span => arrow::datatypes::DataType::UIn16},
+            "u32" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt32},
+            "u64" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt64},
+            "u8" => quote_spanned! { self.span => arrow::datatypes::DataType::UInt8},
+            _ => panic_any(format!(
+                "Unsupported type in arrow_data_inner_type: {:?}",
+                item_type
+            )),
         }
     }
 
+    /// Generate the token stream for the Arrow data type.
+    /// 
+    /// This is used when defining the Arrow schema.
     pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
+        if self.binary {
+            // This respects the LanceDB convention.
+            return quote_spanned! { self.span => arrow::datatypes::DataType::Binary}
+        } 
         let inner = self.arrow_data_inner_type();
         if self.array {
             quote_spanned! { self.span => arrow::datatypes::DataType::List(std::sync::Arc::new(arrow::datatypes::Field::new("item", #inner, true)))}
@@ -128,7 +157,7 @@ impl RowField {
         }
     }
 
-    // In a Batch struct all the fields become arrays, compute a name for them.
+    // In generated <UserType>Arrow struct all the fields become arrays, compute a name for them.
     pub fn array_field_name(&self) -> Ident {
         Ident::new(&format!("{}s", self.name), self.span)
     }
@@ -176,19 +205,16 @@ impl RowSchema {
         let name = ast.ident;
         Ok(RowSchema { name, fields })
     }
-
-
 }
 
 /// Generator
-/// 
+///
 /// Hold methods for generating the <User>Arrow struct and the <User>Arrow implementation.
 struct Generator {
     schema: RowSchema,
 }
 
 impl Generator {
-
     /// The prefix for the generated struct and associated implementation.
     const IDENTIFIER_PREFIX: &'static str = "Arrow";
 
@@ -202,7 +228,8 @@ impl Generator {
 
     /// Generate the token stream for the fields of the generated struct.
     fn declare_derived_arrow_fields(&self) -> Vec<proc_macro2::TokenStream> {
-        self.schema.fields
+        self.schema
+            .fields
             .iter()
             .map(|entry| {
                 let field_name = entry.array_field_name();
@@ -213,7 +240,7 @@ impl Generator {
             .collect::<Vec<_>>()
     }
 
-    /// Declare the derived Arrow struct.
+    /// Declare the derived <UserType>Arrow struct.
     fn declare_derived_arrow_struct(&self) -> TokenStream2 {
         let gen_fields = self.declare_derived_arrow_fields();
         let builder_name = self.name();
@@ -225,7 +252,7 @@ impl Generator {
     }
 
     /// Generate the token stream for loading a an arrow column from a record batch.
-    /// 
+    ///
     /// Note: the identifier `batch` is expected to be in scope and points to the record batch to load from.
     fn load_field_from_arrow(batch_field: &RowField) -> TokenStream2 {
         let name = batch_field.array_field_name();
@@ -307,10 +334,15 @@ impl Generator {
 
         let ty = row_field.arrow_array_inner_type();
 
-        let arrow_array = if row_field.array {
+        let arrow_array = if row_field.array || row_field.binary {
+            // The generated code works better inline a the top scope instead of in a block.
+            // So generate identifier names for the values, offsets, and the list array.
             let values_name = Ident::new(format!("{}_values", name).as_str(), row_field.span);
             let offsets_name = Ident::new(format!("{}_offsets", name).as_str(), row_field.span);
-            let offsets_arrow = Ident::new(format!("{}_offsets_arrow", name).as_str(), row_field.span);
+            let offsets_arrow =
+                Ident::new(format!("{}_offsets_arrow", name).as_str(), row_field.span);
+            let data_type = row_field.arrow_data_type();
+            let data_name = Ident::new(format!("{}_data", name).as_str(), row_field.span);
             quote_spanned! { row_field.span =>
                 let #values_name = #ty::from(
                     items
@@ -324,7 +356,13 @@ impl Generator {
                     #offsets_name.push(#offsets_name[i] + len);
                 }
                 let #offsets_arrow = arrow::array::Int32Array::from_iter(#offsets_name);
-                let #name = bodkin::try_new_generic_list_array(#values_name, &#offsets_arrow)?;
+                let #data_name = arrow::array::ArrayDataBuilder::new(#data_type)
+                    .len(#offsets_arrow.len() - 1)
+                    .add_buffer(#offsets_arrow.into_data().buffers()[0].clone())
+                    .add_child_data(#values_name.into_data())
+                    .build()?;
+            
+                let #name = arrow::array::GenericListArray::<i32>::from(#data_name);
             }
         } else {
             quote_spanned! { row_field.span =>
@@ -379,4 +417,87 @@ fn impl_my_trait(ast: DeriveInput) -> Result<TokenStream2> {
         generator.impl_to_record_batch(),
     ]);
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::array;
+
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(quote!(Vec<u8>), false, false, "Vec < u8 >")]
+    #[case(quote!(i8), false, false, "i8")]
+    #[case(quote!(bool), false, false, "bool")]
+    #[case(quote!(Option<String>), true, false, "String")]
+    #[case(quote!(Vec<String>), false, true, "String")]
+    fn test_row_field_new(
+        #[case] ty: TokenStream2,
+        #[case] nullable: bool,
+        #[case] array: bool,
+        #[case] inner_type: &str,
+    ) {
+        let field: Field = parse_quote! {
+            pub data: #ty
+        };
+        let row_field = RowField::new(field);
+        assert_eq!(row_field.name.to_string(), "data");
+        assert_eq!(row_field.nullable, nullable);
+        assert_eq!(row_field.array, array);
+        assert_eq!(row_field.inner_type.to_string(), inner_type);
+    }
+
+    #[rstest]
+    #[case(quote!(Vec<u8>),"arrow_array :: BinaryArray")]
+    #[case(quote!(i8), "arrow_array :: Int8Array")]
+    #[case(quote!(bool), "arrow_array :: BooleanArray")]
+    #[case(quote!(Option<String>), "arrow_array :: StringArray")]
+    #[case(quote!(Vec<String>), "arrow_array :: StringArray")]
+    fn test_arrow_array_inner_type(#[case] ty: TokenStream2, #[case] expected: &str) {
+        let field: Field = parse_quote! {
+            pub small_int: #ty
+        };
+        let row_field = RowField::new(field);
+        let generated = row_field.arrow_array_inner_type().to_string();
+        assert_eq!(generated, expected);
+    }
+
+    #[rstest]
+    #[case(quote!(f32), "arrow_array :: Float32Array")]
+    #[case(quote!(Vec<u8>), "arrow_array :: BinaryArray")]
+    #[case(quote!(Vec<i32>), "arrow_array :: ListArray")]
+    fn test_arrow_array_type(#[case] ty: TokenStream2, #[case] expected: &str) {
+        let field: Field = parse_quote! {
+            pub my_numbers: #ty
+        };
+        let row_field = RowField::new(field);
+        let array_type = row_field.arrow_array_type().to_string();
+        assert_eq!(array_type, expected);
+    }
+
+    #[rstest]
+    #[case(quote!(f64),"arrow :: datatypes :: DataType :: Float64")]
+    #[case(quote!(i8), "arrow :: datatypes :: DataType :: Int8")]
+    #[case(quote!(bool), "arrow :: datatypes :: DataType :: Bool")]
+    fn test_arrow_data_inner_type(#[case] ty: TokenStream2, #[case] expected: &str) {
+        let field: Field = parse_quote! {
+            pub small_int2: #ty
+        };
+        let row_field = RowField::new(field);
+        let generated = row_field.arrow_data_inner_type().to_string();
+        assert_eq!(generated, expected);
+    }
+
+    #[rstest]
+    #[case(quote!(Vec<i32>), "arrow :: datatypes :: DataType :: List (std :: sync :: Arc :: new (arrow :: datatypes :: Field :: new (\"item\" , arrow :: datatypes :: DataType :: Int32 , true)))")]
+    #[case(quote!(Vec<u8>), "arrow :: datatypes :: DataType :: Binary")]
+    fn test_arrow_data_type(#[case] ty: TokenStream2, #[case] expected: &str) {
+        let field: Field = parse_quote! {
+            pub my_numbers: #ty
+        };
+        let row_field = RowField::new(field);
+        let data_type = row_field.arrow_data_type().to_string();
+        assert_eq!(data_type, expected);
+    }
 }

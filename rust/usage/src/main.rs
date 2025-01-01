@@ -1,9 +1,8 @@
 use std::slice;
 
 use arrow::datatypes::Float32Type;
-use arrow_array::Array;
-use arrow_array::cast::AsArray;
 use bodkin::ArrowIntegration;
+use arrow::array::AsArray;
 
 #[derive(Debug, PartialEq, ArrowIntegration)]
 pub struct Main {
@@ -14,6 +13,7 @@ pub struct Main {
     pub area: f32,
     pub iscrowd: u8,
     pub count: i16,
+    //pub binary: Vec<u8>,
 }
 
 fn generate_some_data() -> Main {
@@ -25,6 +25,7 @@ fn generate_some_data() -> Main {
         area: 1.0,
         iscrowd: 0,
         count: 1,
+       //binary: vec![0, 1, 2, 3],
     }
 }
 
