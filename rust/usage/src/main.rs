@@ -29,6 +29,11 @@ fn generate_some_data() -> Main {
     }
 }
 
+#[derive(ArrowIntegration)]
+pub struct Example {
+    pub id: u32,
+}
+
 fn main() {
     println!("Generated schema: {:#?}", MainArrow::arrow_schema());
     let data = generate_some_data();

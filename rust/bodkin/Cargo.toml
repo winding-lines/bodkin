@@ -1,8 +1,9 @@
 [package]
 name = "bodkin"
-version = "0.1.9"
+version = "0.1.10"
 edition.workspace = true
 description = "Proc macro to simplify the integration of Arrow Data."
+documentation = "https://docs.rs/bodkin"
 license.workspace = true
 repository.workspace = true
 keywords.workspace = true
@@ -13,4 +14,4 @@ rust-version.workspace = true
 arrow = {workspace = true}
 arrow-array = {workspace = true}
 arrow-schema = {workspace = true}
-bodkin-derive = {path="../bodkin-derive", version="0.1.9"}
+bodkin-derive = {path="../bodkin-derive", version="0.1.10"}

@@ -1,3 +1,6 @@
+//! This is an internal library for the `bodkin` crate.
+//! See <https://docs.rs/bodkin> for more information.
+
 #![allow(unused_imports)]
 extern crate proc_macro;
 
