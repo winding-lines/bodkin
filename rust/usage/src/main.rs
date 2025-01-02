@@ -13,7 +13,7 @@ pub struct Main {
     pub area: f32,
     pub iscrowd: u8,
     pub count: i16,
-    //pub binary: Vec<u8>,
+    pub binary: Vec<u8>,
 }
 
 fn generate_some_data() -> Main {
@@ -25,14 +25,10 @@ fn generate_some_data() -> Main {
         area: 1.0,
         iscrowd: 0,
         count: 1,
-       //binary: vec![0, 1, 2, 3],
+        binary: vec![0, 1, 2, 3],
     }
 }
 
-#[derive(ArrowIntegration)]
-pub struct Example {
-    pub id: u32,
-}
 
 fn main() {
     println!("Generated schema: {:#?}", MainArrow::arrow_schema());

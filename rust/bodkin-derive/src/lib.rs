@@ -56,8 +56,11 @@ impl RowField {
 
                 let last_ident = last.ident.to_string();
                 let is_vec = last_ident.as_str() == "Vec";
-                let is_binary = is_vec && inner.to_string() == "u8";
+                let _is_binary = is_vec && inner.to_string() == "u8";
                 let nullable = last_ident.as_str() == "Option";
+
+                // Disable the binary detection for now, many to make this more configurable.
+                let is_binary = false;
 
                 let (inner, array) = if is_binary {
                     (last.into_token_stream(), false)
@@ -430,7 +433,7 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case(quote!(Vec<u8>), false, false, "Vec < u8 >")]
+    #[case(quote!(Vec<u8>), false, true, "u8")]
     #[case(quote!(i8), false, false, "i8")]
     #[case(quote!(bool), false, false, "bool")]
     #[case(quote!(Option<String>), true, false, "String")]
@@ -452,7 +455,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(quote!(Vec<u8>),"arrow_array :: BinaryArray")]
+    #[case(quote!(Vec<u8>),"arrow_array :: UInt8Array")]
     #[case(quote!(i8), "arrow_array :: Int8Array")]
     #[case(quote!(bool), "arrow_array :: BooleanArray")]
     #[case(quote!(Option<String>), "arrow_array :: StringArray")]
@@ -468,7 +471,7 @@ mod tests {
 
     #[rstest]
     #[case(quote!(f32), "arrow_array :: Float32Array")]
-    #[case(quote!(Vec<u8>), "arrow_array :: BinaryArray")]
+    #[case(quote!(Vec<u8>), "arrow_array :: ListArray")]
     #[case(quote!(Vec<i32>), "arrow_array :: ListArray")]
     fn test_arrow_array_type(#[case] ty: TokenStream2, #[case] expected: &str) {
         let field: Field = parse_quote! {
@@ -494,7 +497,7 @@ mod tests {
 
     #[rstest]
     #[case(quote!(Vec<i32>), "arrow :: datatypes :: DataType :: List (std :: sync :: Arc :: new (arrow :: datatypes :: Field :: new (\"item\" , arrow :: datatypes :: DataType :: Int32 , true)))")]
-    #[case(quote!(Vec<u8>), "arrow :: datatypes :: DataType :: Binary")]
+    #[case(quote!(Vec<u8>), "arrow :: datatypes :: DataType :: List (std :: sync :: Arc :: new (arrow :: datatypes :: Field :: new (\"item\" , arrow :: datatypes :: DataType :: UInt8 , true)))")]
     fn test_arrow_data_type(#[case] ty: TokenStream2, #[case] expected: &str) {
         let field: Field = parse_quote! {
             pub my_numbers: #ty
