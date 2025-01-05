@@ -1,16 +1,20 @@
 //! Implement the ArrowIntegration derive macro.
 
-use std::{any::Any, panic::panic_any};
+use std::panic::panic_any;
 
-use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned, ToTokens};
-use syn::{
-    parse::{Parse, ParseStream, Parser},
-    punctuated::Punctuated,
-    spanned::Spanned,
-    Result, *,
-};
+use syn::{spanned::Spanned, Result, *};
+
+use darling::{FromDeriveInput, FromField};
+#[derive(FromDeriveInput, FromField, Default, Debug)]
+#[darling(default, attributes(arrow))]
+pub(crate) struct Opts {
+    pub datatype: Option<String>,
+}
+
+// Allowed values for the `datatype` attribute.
+const BINARY_DATA_TYPE: &str = "Binary";
 
 /// A field in the input struct written by the user.
 ///
@@ -21,16 +25,18 @@ struct RowField {
     inner_type: TokenStream2,
     nullable: bool,
     array: bool,
-    binary: bool,
+    requires_cloning: bool,
+    // Datatype requested by the user.
+    user_datatype: Option<String>,
+
 }
 
 impl RowField {
     fn new(field: Field) -> Self {
-        let (inner_type, nullable, array, binary) = match &field.ty {
+        let opts = Opts::from_field(&field).expect("has opts");
+        let (inner_type, nullable, array, requires_cloning) = match &field.ty {
             Type::Path(path) => {
                 let last = path.path.segments.last().expect("has last");
-
-                // if Vec<u8> then inner should be Vec<u8> and array is false
 
                 let inner = match &last.arguments {
                     PathArguments::AngleBracketed(args) => args
@@ -43,19 +49,9 @@ impl RowField {
 
                 let last_ident = last.ident.to_string();
                 let is_vec = last_ident.as_str() == "Vec";
-                let _is_binary = is_vec && inner.to_string() == "u8";
                 let nullable = last_ident.as_str() == "Option";
 
-                // Disable the binary detection for now, many to make this more configurable.
-                let is_binary = false;
-
-                let (inner, array) = if is_binary {
-                    (last.into_token_stream(), false)
-                } else {
-                    (inner, is_vec)
-                };
-
-                (inner, nullable, array, is_binary)
+                (inner, nullable, is_vec, last_ident.as_str() == "String")
             }
 
             other => (other.into_token_stream(), false, false, false),
@@ -67,7 +63,8 @@ impl RowField {
             inner_type,
             nullable,
             array,
-            binary,
+            requires_cloning,
+            user_datatype: opts.datatype,
         }
     }
 
@@ -75,8 +72,16 @@ impl RowField {
     ///
     /// This is used when instantiating an Arrow array.
     pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
-        if self.binary {
-            return quote_spanned! { self.span => arrow_array::BinaryArray};
+        if let Some(user_datatype) = &self.user_datatype {
+            match user_datatype.as_str() {
+                BINARY_DATA_TYPE => {
+                    return quote_spanned! { self.span => arrow_array::BinaryArray};
+                }
+                _ => panic_any(format!(
+                    "Unsupported datatype in arrow_array_inner_type: {:?}",
+                    user_datatype
+                )),
+            }
         }
         match self.inner_type.to_string().as_str() {
             "String" => quote_spanned! { self.span => arrow_array::StringArray},
@@ -134,13 +139,24 @@ impl RowField {
         }
     }
 
+    fn is_user_binary(&self) -> bool {
+        self.user_datatype.as_deref() == Some(BINARY_DATA_TYPE)
+    }
+
     /// Generate the token stream for the Arrow data type.
     ///
     /// This is used when defining the Arrow schema.
     pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
-        if self.binary {
-            // This respects the LanceDB convention.
-            return quote_spanned! { self.span => arrow::datatypes::DataType::Binary};
+        if let Some(user_datatype) = &self.user_datatype {
+            match user_datatype.as_str() {
+                BINARY_DATA_TYPE => {
+                    return quote_spanned! { self.span => arrow::datatypes::DataType::Binary};
+                }
+                _ => panic_any(format!(
+                    "Unsupported datatype in arrow_data_type: {:?}",
+                    user_datatype
+                )),
+            }
         }
         let inner = self.arrow_data_inner_type();
         if self.array {
@@ -197,6 +213,132 @@ impl RowSchema {
 
         let name = ast.ident;
         Ok(RowSchema { name, fields })
+    }
+}
+
+/// Code to generate an Arrow array from a vector of values.
+struct ArrowArrayGenerator<'a> {
+    row_field: &'a RowField,
+    name: Ident,
+    ty: TokenStream2,
+}
+
+impl<'a> ArrowArrayGenerator<'a> {
+    pub fn new<'b: 'a>(row_field: &'b RowField) -> Self {
+        let name = row_field.array_field_name().clone();
+
+        let ty = row_field.arrow_array_inner_type();
+
+        Self {
+            row_field,
+            name,
+            ty,
+        }
+    }
+
+    fn column_name(&self) -> &Ident {
+        &self.row_field.name
+    }
+
+    /// Token stream for generating a list array from a vector of values.
+    fn generate_list_array(&self) -> TokenStream2 {
+        // The generated code works better inline a the top scope instead of in a block.
+        // So generate identifier names for the values, offsets, and the list array.
+        let values_name = Ident::new(
+            format!("{}_values", self.name).as_str(),
+            self.row_field.span,
+        );
+        let offsets_name = Ident::new(
+            format!("{}_offsets", self.name).as_str(),
+            self.row_field.span,
+        );
+        let offsets_arrow = Ident::new(
+            format!("{}_offsets_arrow", self.name).as_str(),
+            self.row_field.span,
+        );
+        let data_type = self.row_field.arrow_data_type();
+        let data_name = Ident::new(format!("{}_data", self.name).as_str(), self.row_field.span);
+        let ty = &self.ty;
+        let column_name = self.column_name();
+        let name = &self.name;
+        quote_spanned! { self.row_field.span =>
+            let #values_name = #ty::from(
+                items
+                    .iter()
+                    .flat_map(|item| item.#column_name.clone())
+                    .collect::<Vec<_>>(),
+            );
+            let mut #offsets_name: Vec<i32> = Vec::with_capacity(#values_name.len() + 1);
+            #offsets_name.push(0);
+            for (i, len) in items.iter().map(|item| item.#column_name.len() as i32).enumerate() {
+                #offsets_name.push(#offsets_name[i] + len);
+            }
+            let #offsets_arrow = arrow::array::Int32Array::from_iter(#offsets_name);
+            let #data_name = arrow::array::ArrayDataBuilder::new(#data_type)
+                .len(#offsets_arrow.len() - 1)
+                .add_buffer(#offsets_arrow.into_data().buffers()[0].clone())
+                .add_child_data(#values_name.into_data())
+                .build()?;
+
+            let #name = arrow::array::GenericListArray::<i32>::from(#data_name);
+        }
+    }
+
+    fn generate_binary_array(&self) -> TokenStream2 {
+
+            let column_name = self.column_name();
+            let name = &self.name;
+            quote_spanned! { self.row_field.span =>
+                let #name = arrow_array::BinaryArray::from_iter_values(
+                    items
+                        .iter()
+                        .map(|item| item.#column_name.as_slice())
+                );
+            }
+    }
+
+    fn generate_cloned_array(&self) -> TokenStream2 {
+        let column_name = self.column_name();
+        let ty = &self.ty;
+
+        let name = &self.name;
+        quote_spanned! { self.row_field.span =>
+            let #name = #ty::from(
+                items
+                    .iter()
+                    .map(|item| item.#column_name.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    fn generate_primitive_array(&self) -> TokenStream2 {
+        let column_name = self.column_name();
+        let ty = &self.ty;
+
+        let name = &self.name;
+        quote_spanned! { self.row_field.span =>
+            let #name = #ty::from(
+                items
+                    .iter()
+                    .map(|item| item.#column_name)
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// Generate the token stream for generating a list of primitive values from a record batch, for a given field.
+    fn rust_vec_to_arrow_array(self) -> (Ident, TokenStream2) {
+        let arrow_array = if self.row_field.is_user_binary() {
+            self.generate_binary_array()
+        } else if self.row_field.array {
+            self.generate_list_array()
+        } else if self.row_field.requires_cloning {
+            self.generate_cloned_array()
+        } else {
+            self.generate_primitive_array()
+        };
+        (self.name.clone(), arrow_array)
     }
 }
 
@@ -320,55 +462,6 @@ impl Generator {
         }
     }
 
-    /// Generate the token stream for generating a list of primitive values from a record batch, for a given field.
-    fn rust_vec_to_arrow_array(row_field: &RowField) -> (Ident, TokenStream2) {
-        let column_name = &row_field.name;
-        let name = row_field.array_field_name().clone();
-
-        let ty = row_field.arrow_array_inner_type();
-
-        let arrow_array = if row_field.array || row_field.binary {
-            // The generated code works better inline a the top scope instead of in a block.
-            // So generate identifier names for the values, offsets, and the list array.
-            let values_name = Ident::new(format!("{}_values", name).as_str(), row_field.span);
-            let offsets_name = Ident::new(format!("{}_offsets", name).as_str(), row_field.span);
-            let offsets_arrow =
-                Ident::new(format!("{}_offsets_arrow", name).as_str(), row_field.span);
-            let data_type = row_field.arrow_data_type();
-            let data_name = Ident::new(format!("{}_data", name).as_str(), row_field.span);
-            quote_spanned! { row_field.span =>
-                let #values_name = #ty::from(
-                    items
-                        .iter()
-                        .flat_map(|item| item.#column_name.clone())
-                        .collect::<Vec<_>>(),
-                );
-                let mut #offsets_name: Vec<i32> = Vec::with_capacity(#values_name.len() + 1);
-                #offsets_name.push(0);
-                for (i, len) in items.iter().map(|item| item.#column_name.len() as i32).enumerate() {
-                    #offsets_name.push(#offsets_name[i] + len);
-                }
-                let #offsets_arrow = arrow::array::Int32Array::from_iter(#offsets_name);
-                let #data_name = arrow::array::ArrayDataBuilder::new(#data_type)
-                    .len(#offsets_arrow.len() - 1)
-                    .add_buffer(#offsets_arrow.into_data().buffers()[0].clone())
-                    .add_child_data(#values_name.into_data())
-                    .build()?;
-
-                let #name = arrow::array::GenericListArray::<i32>::from(#data_name);
-            }
-        } else {
-            quote_spanned! { row_field.span =>
-                let #name = #ty::from(items
-                    .iter()
-                    .map(|item| item.#column_name.clone())
-                    .collect::<Vec<_>>());
-
-            }
-        };
-        (name, arrow_array)
-    }
-
     /// Implement the `to_record_batch` method for the generated struct.
     fn impl_to_record_batch(self) -> TokenStream2 {
         let builder_name = self.name();
@@ -376,7 +469,7 @@ impl Generator {
             .schema
             .fields
             .iter()
-            .map(Self::rust_vec_to_arrow_array)
+            .map(|f| ArrowArrayGenerator::new(f).rust_vec_to_arrow_array())
             .unzip();
         let struct_row_name = self.schema.name;
         quote! {
@@ -414,7 +507,7 @@ pub(crate) fn impl_arrow_integration(ast: DeriveInput) -> Result<TokenStream2> {
 
 #[cfg(test)]
 mod tests {
-    use std::array;
+    
 
     use super::*;
     use rstest::rstest;
