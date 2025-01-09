@@ -11,6 +11,7 @@ use darling::{FromDeriveInput, FromField};
 #[darling(default, attributes(arrow))]
 pub(crate) struct Opts {
     pub datatype: Option<String>,
+    pub metadata: Option<Vec<LitStr>>,
 }
 
 // Allowed values for the `datatype` attribute.
@@ -27,8 +28,8 @@ struct RowField {
     nullable: bool,
     array: bool,
     requires_cloning: bool,
-    // Datatype requested by the user.
-    user_datatype: Option<String>,
+    // User field level options.
+    user_opts: Opts,
 
 }
 
@@ -65,7 +66,7 @@ impl RowField {
             nullable,
             array,
             requires_cloning,
-            user_datatype: opts.datatype,
+            user_opts: opts,
         }
     }
 
@@ -73,7 +74,7 @@ impl RowField {
     ///
     /// This is used when instantiating an Arrow array.
     pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
-        if let Some(user_datatype) = &self.user_datatype {
+        if let Some(user_datatype) = &self.user_opts.datatype {
             match user_datatype.as_str() {
                 DATA_TYPE_BINARY => {
                     return quote_spanned! { self.span => arrow_array::BinaryArray};
@@ -144,18 +145,18 @@ impl RowField {
     }
 
     fn is_user_binary(&self) -> bool {
-        self.user_datatype.as_deref() == Some(DATA_TYPE_BINARY)
+        self.user_opts.datatype.as_deref() == Some(DATA_TYPE_BINARY)
     }
 
     fn is_user_large_binary(&self) -> bool {
-        self.user_datatype.as_deref() == Some(DATA_TYPE_LARGE_BINARY)
+        self.user_opts.datatype.as_deref() == Some(DATA_TYPE_LARGE_BINARY)
     }    
 
     /// Generate the token stream for the Arrow data type.
     ///
     /// This is used when defining the Arrow schema.
     pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
-        if let Some(user_datatype) = &self.user_datatype {
+        if let Some(user_datatype) = &self.user_opts.datatype {
             match user_datatype.as_str() {
                 DATA_TYPE_BINARY => {
                     return quote_spanned! { self.span => arrow::datatypes::DataType::Binary};
@@ -474,7 +475,14 @@ impl Generator {
                 let name = field.name.to_string();
                 let data_type = field.arrow_data_type();
                 let nullable = field.nullable;
-                quote_spanned! { field.span => arrow::datatypes::Field::new(#name, #data_type, #nullable)}
+                let mut simple_field = quote_spanned! { field.span => arrow::datatypes::Field::new(#name, #data_type, #nullable)};
+                let metadata = field.user_opts.metadata.as_ref();
+                if let Some(metadata) = metadata {
+                        let key = &metadata[0];
+                        let value = &metadata[1];
+                        simple_field = quote_spanned! { field.span => #simple_field.with_metadata(std::iter::once((#key.to_string(), #value.to_string())).collect())};
+                }
+                simple_field
             })
             .collect::<Vec<_>>();
         quote! {

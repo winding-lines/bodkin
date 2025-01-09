@@ -1,6 +1,6 @@
 [package]
 name = "bodkin-derive"
-version = "0.1.15"
+version = "0.1.16"
 edition.workspace = true
 description = "Proc macro to simplify the integration of Arrow Data."
 documentation = "https://docs.rs/bodkin"
