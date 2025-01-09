@@ -18,7 +18,7 @@ pub struct Main {
 
 #[derive(Debug, PartialEq, ArrowIntegration)]
 pub struct Blobish {
-    #[arrow(datatype = "Binary")]
+    #[arrow(datatype = "LargeBinary")]
     pub binary: Vec<u8>,
 }
 

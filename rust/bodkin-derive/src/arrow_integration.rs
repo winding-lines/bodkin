@@ -14,7 +14,8 @@ pub(crate) struct Opts {
 }
 
 // Allowed values for the `datatype` attribute.
-const BINARY_DATA_TYPE: &str = "Binary";
+const DATA_TYPE_BINARY: &str = "Binary";
+const DATA_TYPE_LARGE_BINARY: &str = "LargeBinary";
 
 /// A field in the input struct written by the user.
 ///
@@ -74,8 +75,11 @@ impl RowField {
     pub fn arrow_array_inner_type(&self) -> proc_macro2::TokenStream {
         if let Some(user_datatype) = &self.user_datatype {
             match user_datatype.as_str() {
-                BINARY_DATA_TYPE => {
+                DATA_TYPE_BINARY => {
                     return quote_spanned! { self.span => arrow_array::BinaryArray};
+                }
+                DATA_TYPE_LARGE_BINARY => {
+                    return quote_spanned! { self.span => arrow_array::DATA_TYPE_LARGE_BINARYBinaryArray};
                 }
                 _ => panic_any(format!(
                     "Unsupported datatype in arrow_array_inner_type: {:?}",
@@ -140,8 +144,12 @@ impl RowField {
     }
 
     fn is_user_binary(&self) -> bool {
-        self.user_datatype.as_deref() == Some(BINARY_DATA_TYPE)
+        self.user_datatype.as_deref() == Some(DATA_TYPE_BINARY)
     }
+
+    fn is_user_large_binary(&self) -> bool {
+        self.user_datatype.as_deref() == Some(DATA_TYPE_LARGE_BINARY)
+    }    
 
     /// Generate the token stream for the Arrow data type.
     ///
@@ -149,8 +157,11 @@ impl RowField {
     pub fn arrow_data_type(&self) -> proc_macro2::TokenStream {
         if let Some(user_datatype) = &self.user_datatype {
             match user_datatype.as_str() {
-                BINARY_DATA_TYPE => {
+                DATA_TYPE_BINARY => {
                     return quote_spanned! { self.span => arrow::datatypes::DataType::Binary};
+                }
+                DATA_TYPE_LARGE_BINARY => {
+                    return quote_spanned! { self.span => arrow::datatypes::DataType::LargeBinary};
                 }
                 _ => panic_any(format!(
                     "Unsupported datatype in arrow_data_type: {:?}",
@@ -228,7 +239,6 @@ impl<'a> ArrowArrayGenerator<'a> {
         let name = row_field.array_field_name().clone();
 
         let ty = row_field.arrow_array_inner_type();
-
         Self {
             row_field,
             name,
@@ -296,6 +306,19 @@ impl<'a> ArrowArrayGenerator<'a> {
                 );
             }
     }
+    
+    fn generate_large_binary_array(&self) -> TokenStream2 {
+
+            let column_name = self.column_name();
+            let name = &self.name;
+            quote_spanned! { self.row_field.span =>
+                let #name = arrow_array::LargeBinaryArray::from_iter_values(
+                    items
+                        .iter()
+                        .map(|item| item.#column_name.as_slice())
+                );
+            }
+    }
 
     fn generate_cloned_array(&self) -> TokenStream2 {
         let column_name = self.column_name();
@@ -331,6 +354,8 @@ impl<'a> ArrowArrayGenerator<'a> {
     fn rust_vec_to_arrow_array(self) -> (Ident, TokenStream2) {
         let arrow_array = if self.row_field.is_user_binary() {
             self.generate_binary_array()
+        } else if self.row_field.is_user_large_binary() {
+            self.generate_large_binary_array()
         } else if self.row_field.array {
             self.generate_list_array()
         } else if self.row_field.requires_cloning {
